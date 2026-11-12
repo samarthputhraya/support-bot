@@ -1,0 +1,54 @@
+# A live check started from Modelpin for Jira. A Jira admin selects "Run a live check"; their browser opens the
+# start page, which runs this workflow with a sealed ticket. The ticket names that Jira site's web trigger and the
+# replacement model; only this repository's MODELPIN_LIVE_SECRET opens it, and it is good for 30 minutes.
+# The run scans the repository, checks the replacement against the recorded baseline, and sends both results,
+# signed for that one request, to that one site.
+name: Modelpin live check
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticket:
+        description: Sealed by Modelpin for Jira; only this repository's secret opens it
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  live-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Open the ticket
+        env:
+          TICKET: ${{ inputs.ticket }}
+          MODELPIN_LIVE_SECRET: ${{ secrets.MODELPIN_LIVE_SECRET }}
+        run: node .github/live/open-ticket.mjs
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install Modelpin and its relay
+        run: pip install "modelpin[providers]==0.5.3" "modelpin-relay==0.1.1"
+      - name: Ask about the old model
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python .github/live/old-model.py
+      - name: Scan, and send the result to Jira
+        run: |
+          modelpin watch --json > "$RUNNER_TEMP/modelpin-watch.json" || true
+          modelpin-relay publish-watch --input "$RUNNER_TEMP/modelpin-watch.json"
+      - name: Check the replacement, and send the result to Jira
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          start=$(date +%s)
+          code=0
+          modelpin check --to "$LIVE_MODEL" || code=$?
+          modelpin-relay publish --exit-code "$code" --since "$start" --to "$LIVE_MODEL"
+          exit $code
