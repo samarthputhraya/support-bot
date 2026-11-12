@@ -1,9 +1,11 @@
 // Opens the ticket Modelpin for Jira sealed when a Jira admin started a live check, and gives this run what it
 // needs to report back to that one Jira site:
-//   - the site's web trigger address, as MODELPIN_WEBHOOK_URL;
-//   - the signing key for that one request, as MODELPIN_WEBHOOK_SECRET;
-//   - the replacement model to check, as LIVE_MODEL.
-// Both secrets are masked in the log before they are written to $GITHUB_ENV, and nothing else prints them.
+//   - the site's web trigger address, as this step's output "url";
+//   - the signing key for that one request, as this step's output "key";
+//   - the replacement model to check, as LIVE_MODEL in $GITHUB_ENV.
+// The ticket is read from the run's event payload ($GITHUB_EVENT_PATH), never from a step's env, so the run log
+// doesn't show it. The address and key are masked before they are written, and only the two steps that send
+// results to Jira are given them; nothing prints them.
 //
 // The format is Modelpin for Jira's (apps/jira/src/domain/live.ts in modelpin-atlassian):
 //   ticket = "v1." + base64url(iv | ciphertext | tag), AES-256-GCM, additional data "modelpin-live-v1",
@@ -12,11 +14,13 @@
 // No dependencies: Node's own crypto, as on every GitHub-hosted runner.
 
 import { createDecipheriv, createHmac } from "node:crypto";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 export const REPLACEMENTS = ["claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6"];
 export const BRANCHES = ["main", "fixed-prompt"];
+// A check takes about 2 minutes, and Jira takes no results once the ticket's 30 minutes are over.
+export const MIN_SECONDS_LEFT = 5 * 60;
 
 const REQUEST_ID = /^[0-9a-f]{32}$/;
 const WEB_TRIGGER = /^https:\/\/[a-z0-9-]+\.webtrigger\.atlassian\.app\/public\/[A-Za-z0-9_-]+$/;
@@ -52,6 +56,12 @@ export function openTicket(secret, sealed) {
   }
 }
 
+/** The sealed ticket in the run's event payload: the workflow_dispatch input "ticket", or "" when there is none. */
+export function sealedFromEvent(event) {
+  const ticket = event && typeof event === "object" ? event.inputs?.ticket : undefined;
+  return typeof ticket === "string" ? ticket : "";
+}
+
 /** Why this run won't use the ticket, or null when it may. */
 export function refusal(ticket, { branch, nowSeconds }) {
   if (!ticket || typeof ticket !== "object") return "the ticket wasn't sealed by Modelpin for Jira with this repository's secret";
@@ -60,11 +70,23 @@ export function refusal(ticket, { branch, nowSeconds }) {
   if (!REPLACEMENTS.includes(ticket.m)) return "the ticket names a model this demo doesn't check";
   if (!BRANCHES.includes(ticket.b) || ticket.b !== branch) return `the ticket is for the ${ticket.b} branch, and this run is on ${branch}`;
   if (typeof ticket.x !== "number" || ticket.x <= nowSeconds) return "the live check's 30 minutes are over; start a new one in Jira";
+  if (ticket.x - nowSeconds < MIN_SECONDS_LEFT) {
+    return "under 5 of the live check's 30 minutes are left, too few to finish before Jira stops taking results; start a new one in Jira";
+  }
   return null;
 }
 
+function readEvent(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 function main() {
-  const ticket = openTicket(process.env.MODELPIN_LIVE_SECRET ?? "", process.env.TICKET ?? "");
+  const sealed = sealedFromEvent(readEvent(process.env.GITHUB_EVENT_PATH ?? ""));
+  const ticket = openTicket(process.env.MODELPIN_LIVE_SECRET ?? "", sealed);
   const why = refusal(ticket, {
     branch: process.env.GITHUB_REF_NAME ?? "",
     nowSeconds: Math.floor(Date.now() / 1000),
@@ -74,13 +96,12 @@ function main() {
     process.exit(1);
   }
   const key = signingKey(process.env.MODELPIN_LIVE_SECRET, ticket.r);
-  // Masked first, so no later step can print them.
+  // Masked first, so no later step can print them. Step outputs, not $GITHUB_ENV, so only the steps that send
+  // results to Jira get them.
   console.log(`::add-mask::${ticket.u}`);
   console.log(`::add-mask::${key}`);
-  appendFileSync(
-    process.env.GITHUB_ENV,
-    `MODELPIN_WEBHOOK_URL=${ticket.u}\nMODELPIN_WEBHOOK_SECRET=${key}\nLIVE_MODEL=${ticket.m}\n`,
-  );
+  appendFileSync(process.env.GITHUB_OUTPUT, `url=${ticket.u}\nkey=${key}\n`);
+  appendFileSync(process.env.GITHUB_ENV, `LIVE_MODEL=${ticket.m}\n`);
   console.log(`Live check for one Jira site: ${ticket.b} branch, claude-sonnet-4-5-20250929 against ${ticket.m}.`);
 }
 
