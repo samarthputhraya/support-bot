@@ -1,8 +1,8 @@
 # A live check started from Modelpin for Jira. A Jira admin selects "Run a live check"; their browser opens the
 # start page, which runs this workflow with a sealed ticket. The ticket names that Jira site's web trigger and the
 # replacement model; only this repository's MODELPIN_LIVE_SECRET opens it, and it is good for 30 minutes.
-# The run scans the repository, checks the replacement against the recorded baseline, and sends both results,
-# signed for that one request, to that one site.
+# The run scans the repository, checks the replacement against the recorded baseline, says on this run which
+# scenarios regressed (names and counts only), and sends both results, signed for that one request, to that one site.
 name: Modelpin live check
 
 on:
@@ -50,5 +50,6 @@ jobs:
           start=$(date +%s)
           code=0
           modelpin check --to "$LIVE_MODEL" || code=$?
+          python .github/live/note.py --since "$start" --to "$LIVE_MODEL" --exit-code "$code" || true
           modelpin-relay publish --exit-code "$code" --since "$start" --to "$LIVE_MODEL"
           exit $code
