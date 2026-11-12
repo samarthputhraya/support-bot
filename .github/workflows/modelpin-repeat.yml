@@ -1,0 +1,48 @@
+# Repeat checks behind "N of M checks agree" in Modelpin for Jira. It runs the command a live check runs,
+# `modelpin check --to <replacement>` with this repository's 5 runs per scenario, ten times, one after another, on
+# the branch it is started on. After each check, .github/live/verdicts.py prints one line: the exit code, each
+# scenario's verdict and the token totals, never a reply. Nothing is sent anywhere, and only people who can write
+# to this repository can start it.
+name: Modelpin repeat checks
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: The replacement to check
+        required: true
+        type: choice
+        options:
+          - claude-sonnet-5-5
+          - claude-sonnet-5
+          - claude-sonnet-4-6
+
+permissions:
+  contents: read
+
+jobs:
+  repeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install Modelpin
+        run: pip install "modelpin[providers]==0.5.3"
+      - name: Check the replacement ten times
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODEL: ${{ inputs.model }}
+        run: |
+          for n in 1 2 3 4 5 6 7 8 9 10; do
+            start=$(date +%s)
+            code=0
+            modelpin check --to "$MODEL" || code=$?
+            python .github/live/verdicts.py --since "$start" --to "$MODEL" --exit-code "$code" || true
+            echo "Repeat check $n of 10 on $MODEL: exit $code, $(( $(date +%s) - start )) seconds."
+            sleep 1
+          done
