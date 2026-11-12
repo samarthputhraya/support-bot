@@ -3,6 +3,9 @@
 # replacement model; only this repository's MODELPIN_LIVE_SECRET opens it, and it is good for 30 minutes.
 # The run scans the repository, checks the replacement against the recorded baseline, says on this run which
 # scenarios regressed (names and counts only), and sends both results, signed for that one request, to that one site.
+#
+# The ticket is read from the event payload, so this log never shows it. Only the two "Send" steps get the site's
+# address and the request's signing key, both masked. Modelpin's dependencies are pinned in .github/live/requirements.txt.
 name: Modelpin live check
 
 on:
@@ -26,24 +29,28 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Open the ticket
+        id: ticket
         env:
-          TICKET: ${{ inputs.ticket }}
           MODELPIN_LIVE_SECRET: ${{ secrets.MODELPIN_LIVE_SECRET }}
         run: node .github/live/open-ticket.mjs
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7.1.0
         with:
           python-version: "3.12"
       - name: Install Modelpin and its relay
-        run: pip install "modelpin[providers]==0.5.3" "modelpin-relay==0.1.1"
+        run: pip install -r .github/live/requirements.txt
       - name: Ask about the old model
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python .github/live/old-model.py
-      - name: Scan, and send the result to Jira
-        run: |
-          modelpin watch --json > "$RUNNER_TEMP/modelpin-watch.json" || true
-          modelpin-relay publish-watch --input "$RUNNER_TEMP/modelpin-watch.json"
-      - name: Check the replacement, and send the result to Jira
+      - name: Scan the repository
+        run: modelpin watch --json > "$RUNNER_TEMP/modelpin-watch.json" || true
+      - name: Send the scan to Jira
+        env:
+          MODELPIN_WEBHOOK_URL: ${{ steps.ticket.outputs.url }}
+          MODELPIN_WEBHOOK_SECRET: ${{ steps.ticket.outputs.key }}
+        run: modelpin-relay publish-watch --input "$RUNNER_TEMP/modelpin-watch.json"
+      - name: Check the replacement
+        id: check
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
@@ -51,5 +58,19 @@ jobs:
           code=0
           modelpin check --to "$LIVE_MODEL" || code=$?
           python .github/live/note.py --since "$start" --to "$LIVE_MODEL" --exit-code "$code" || true
-          modelpin-relay publish --exit-code "$code" --since "$start" --to "$LIVE_MODEL"
-          exit $code
+          echo "start=$start" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+      - name: Send the check to Jira
+        env:
+          MODELPIN_WEBHOOK_URL: ${{ steps.ticket.outputs.url }}
+          MODELPIN_WEBHOOK_SECRET: ${{ steps.ticket.outputs.key }}
+          START: ${{ steps.check.outputs.start }}
+          CODE: ${{ steps.check.outputs.code }}
+        run: modelpin-relay publish --exit-code "$CODE" --since "$START" --to "$LIVE_MODEL"
+      # Modelpin ends with exit code 1 when it confirms a regression, which is how it blocks a merge. The run ends
+      # the same way here, after both results are in Jira, so the failed step is this one and never a send.
+      - name: End with Modelpin's exit code
+        if: steps.check.outputs.code != '0'
+        env:
+          CODE: ${{ steps.check.outputs.code }}
+        run: exit "$CODE"

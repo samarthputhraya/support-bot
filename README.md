@@ -81,8 +81,11 @@ on a fresh set of runs.
 `.github/workflows/modelpin-live.yml` runs when a Jira admin selects **Run a live check** in
 Modelpin for Jira. Their browser opens a start page, which runs the workflow with a sealed ticket:
 the Jira site's address for results, the request, the branch and the replacement model. Only this
-repository's `MODELPIN_LIVE_SECRET` opens the ticket, it is good for 30 minutes, and the address and
-the signing key it yields are masked in the log. The run:
+repository's `MODELPIN_LIVE_SECRET` opens the ticket. The run reads it from its event payload, so the
+log never shows it; it is good for 30 minutes, and a run refuses it with under 5 minutes left. The
+address and the signing key it yields are masked, and only the two steps that send results to Jira
+get them. Modelpin and its dependencies install at the exact versions in `.github/live/requirements.txt`,
+the versions of the last good live check. The run:
 
 1. asks Anthropic's API once whether it still serves `claude-sonnet-4-5-20250929` (the status only);
 2. scans the repository with `modelpin watch` and sends the result to that Jira site, where it opens
