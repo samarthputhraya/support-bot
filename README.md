@@ -1,4 +1,4 @@
-# support-bot on Claude
+# support-bot
 
 A small customer support bot for an online outdoor-gear shop. It answers a signed-in customer
 with one LLM and six tools: look up an order, refund it, change its shipping address, hand the
@@ -75,6 +75,21 @@ modelpin check --to claude-sonnet-5-5
 Modelpin replays the eight scenarios 5 times on the new model and compares them with the baseline.
 It fails only when a change is statistically significant, large enough to matter, and comes back
 on a fresh set of runs.
+
+## Live checks from Jira
+
+`.github/workflows/modelpin-live.yml` runs when a Jira admin selects **Run a live check** in
+Modelpin for Jira. Their browser opens a start page, which runs the workflow with a sealed ticket:
+the Jira site's address for results, the request, the branch and the replacement model. Only this
+repository's `MODELPIN_LIVE_SECRET` opens the ticket, it is good for 30 minutes, and the address and
+the signing key it yields are masked in the log. The run:
+
+1. asks Anthropic's API once whether it still serves `claude-sonnet-4-5-20250929` (the status only);
+2. scans the repository with `modelpin watch` and sends the result to that Jira site, where it opens
+   a work item marked [Live demo];
+3. checks the replacement with `modelpin check` and sends the evidence to the same work item.
+
+The workflow's tests: `node --test .github/live/open-ticket.test.mjs`.
 
 ## Licence
 
