@@ -37,7 +37,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install Modelpin and its relay
-        run: pip install -r .github/live/requirements.txt
+        run: pip install --require-hashes -r .github/live/requirements.txt
       - name: Ask about the old model
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
