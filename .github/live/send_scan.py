@@ -1,11 +1,13 @@
 """Sends a repository scan to the one Jira site its ticket names, signed for that one request.
 
 The workflow's scan job read the named repository's files, which this job never sees; it hands over one event.json
-built by `modelpin-relay publish-watch --ci local`. That job held no secret, so its event is checked here before it
-is signed: one scan (a watch event), of exactly the repository the ticket names, from the relay's own schema. Then
-it is rebuilt from the fields a scan sends, with no work item keys: a repository's branch names and commit messages
-come from its own committers, and must never point at a work item on the judge's site. The address and the key come
-from this job's own opening of the ticket.
+built by `modelpin-relay publish-watch --ci local`. That job held no secret, and its input was a stranger's
+repository, so this job trusts it for two things only: which model IDs Modelpin found, and in which files. It checks
+that the event is one scan (a watch event) of exactly the repository the ticket names. Then it asks its own pinned
+Modelpin for every fact about those IDs (status, dates, replacement, the vendor page, the check command), so a scan
+job that misbehaved could never put a false date or a link of its own on a judge's work item (security review of
+the scan, 14 Nov 2026, F3). It sends no work item keys: a repository's branch names and commit messages come from
+its own committers, and must never point at a work item on the judge's site.
 
 It prints only the outcome, never the event, the address or the key.
 
@@ -15,25 +17,34 @@ It prints only the outcome, never the event, the address or the key.
 import argparse
 import json
 import os
+import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
-from modelpin_relay.payload import MAX_WATCH_MODELS, SCHEMA_ID
+from modelpin_relay.payload import MAX_WATCH_MODELS, SCHEMA_ID, build_watch
 from modelpin_relay.transport import send_event
 from modelpin_relay.truncate import EventTooLarge, fit
 
 MAX_FILE_BYTES = 2_000_000
 SOURCE_FIELDS = ("ci", "repo_key", "repo_url", "commit", "branch", "pr_id", "pr_url", "build_url", "build_number")
 EVENT_FIELDS = ("schema", "event_id", "kind", "sent_at", "relay_version", "modelpin_version")
+# A model ID as Modelpin's scan reports one: no spaces, quotes or control characters.
+MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}")
+# A file path relative to the repository, as the relay reports it.
+CODE_REF = re.compile(r"[^\x00-\x1f\x7f]{1,500}")
+MAX_REFS = 50
+PROVIDERS = ["anthropic", "openai", "google"]
 
 
 class Refused(Exception):
     """The event isn't a scan of the ticket's repository; nothing is sent."""
 
 
-def checked(event: Any, repo: str) -> dict[str, Any]:
-    """The scan to send, rebuilt from what a scan sends, or Refused with the reason."""
+def found(event: Any, repo: str) -> list[tuple[str, list[str]]]:
+    """The model IDs the scan job found and the files it found each in, once checked; or Refused with the reason."""
     if not isinstance(event, dict):
         raise Refused("the scan job's file isn't an event")
     if event.get("schema") != SCHEMA_ID or event.get("kind") != "watch":
@@ -49,22 +60,89 @@ def checked(event: Any, repo: str) -> dict[str, Any]:
     models = watch.get("models")
     if not isinstance(models, list) or len(models) > MAX_WATCH_MODELS:
         raise Refused("the scan job's event lists no models, or too many")
-    if not all(isinstance(m, dict) for m in models):
-        raise Refused("the scan job's event isn't a scan")
+    out: dict[str, list[str]] = {}
+    for model in models:
+        model_id = model.get("id") if isinstance(model, dict) else None
+        if not isinstance(model_id, str) or not MODEL_ID.fullmatch(model_id):
+            raise Refused("the scan job's event names something that isn't a model ID")
+        refs = model.get("code_refs")
+        refs = refs if isinstance(refs, list) else []
+        clean = [r for r in refs if isinstance(r, str) and CODE_REF.fullmatch(r) and not r.startswith("/")]
+        kept = out.setdefault(model_id, [])
+        for ref in clean:
+            if ref not in kept and len(kept) < MAX_REFS:
+                kept.append(ref)
+    return list(out.items())
+
+
+def registry_facts(ids: list[str]) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """This job's own Modelpin on these IDs: each one's row (the relay's kept fields), and the run's watch payload."""
+    with tempfile.TemporaryDirectory() as tmp:
+        config = Path(tmp) / "facts.yaml"
+        # JSON is YAML, and json.dumps quotes every ID, so an ID can't change the config's meaning.
+        config.write_text(json.dumps({"models": ids, "providers": PROVIDERS}), encoding="utf-8")
+        run = subprocess.run(
+            ["modelpin", "watch", "--json", "--config", str(config), "--store-dir", str(Path(tmp) / "store")],
+            capture_output=True,
+            text=True,
+            cwd=tmp,
+            timeout=120,
+            check=False,
+        )
+    try:
+        doc = json.loads(run.stdout)
+    except ValueError as exc:
+        raise Refused("this job's Modelpin couldn't look up the model IDs") from exc
+    built = build_watch(doc if isinstance(doc, dict) else {}).payload
+    return {m["id"]: m for m in built["models"]}, built
+
+
+def unknown_row(model_id: str) -> dict[str, Any]:
+    """A model this job's Modelpin didn't report back: unknown, never safe, with no facts."""
+    return {
+        "id": model_id,
+        "known": False,
+        "status": None,
+        "effective_status": None,
+        "deprecated_at": None,
+        "retired_at": None,
+        "days_remaining": None,
+        "affected": False,
+        "replacement_id": None,
+        "replacement_provider": None,
+        "source_url": None,
+        "fetched_at": None,
+        "has_baseline": False,
+        "check_command": None,
+        "sources": ["scan"],
+        "role": "app",
+        "notes": None,
+        "code_refs": [],
+        "history_keys": [],
+    }
+
+
+def rebuilt(event: dict[str, Any], models: list[tuple[str, list[str]]], facts: dict[str, dict[str, Any]],
+            payload: dict[str, Any] | None) -> dict[str, Any]:
+    """The scan to send: the scan job's envelope and file paths, this job's facts, no work item keys."""
+    source = event["source"]
     out: dict[str, Any] = {k: event.get(k) for k in EVENT_FIELDS}
     out["sample"] = False
     out["source"] = {k: source.get(k) for k in SOURCE_FIELDS}
-    # File paths stay: they say where in the repository each model ID is. Work item keys never do.
     out["source"].update(jira_keys=[], code_refs=[], history_keys=[])
     out["check"] = None
+    rows = []
+    for model_id, refs in models:
+        row = dict(facts.get(model_id) or unknown_row(model_id))
+        row.update(sources=["scan"], code_refs=refs, history_keys=[])
+        rows.append(row)
     out["watch"] = {
-        "registry_newest_fetched_at": watch.get("registry_newest_fetched_at"),
-        "exit_code": watch.get("exit_code"),
-        "models": [{**m, "history_keys": []} for m in models],
+        "registry_newest_fetched_at": payload["registry_newest_fetched_at"] if payload else None,
+        # Modelpin's own exit code for these IDs; with none found, its "nothing declared" code.
+        "exit_code": payload["exit_code"] if payload else 4,
+        "models": rows,
     }
-    out["truncated"] = [t for t in event.get("truncated", []) if t != "history_keys"] if isinstance(
-        event.get("truncated"), list
-    ) else []
+    out["truncated"] = []
     return out
 
 
@@ -88,21 +166,22 @@ def main(argv: list[str] | None = None) -> int:
         print("::error::Not sent: the ticket's address or key is missing.")
         return 1
     try:
-        event = checked(read_event(args.event), args.repo)
-        body = fit(event)
+        event = read_event(args.event)
+        models = found(event, args.repo)
+        facts, payload = registry_facts([m for m, _ in models]) if models else ({}, None)
+        body = fit(rebuilt(event, models, facts, payload))
     except Refused as why:
         print(f"::error::Not sent: {why}.")
         return 1
-    except EventTooLarge:
-        print("::error::Not sent: the scan is too large for Jira to take.")
+    except (EventTooLarge, subprocess.TimeoutExpired):
+        print("::error::Not sent: the scan is too large to look up or for Jira to take.")
         return 1
     result = send_event(url, key, body)
     answer = f"HTTP {result.status}" if result.status is not None else (result.error or "no response")
     if result.app_status:
         answer += f" {result.app_status}"
-    models = len(event["watch"]["models"])
     if result.ok:
-        print(f"Scan sent to Jira: {models} model{'' if models == 1 else 's'}, {answer}.")
+        print(f"Scan sent to Jira: {len(models)} model{'' if len(models) == 1 else 's'}, {answer}.")
         return 0
     print(f"::error::Jira didn't accept the scan: {answer}.")
     return 1
