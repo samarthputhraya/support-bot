@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from typing import ClassVar
 from unittest import mock
 
 import send_scan
@@ -76,7 +77,8 @@ class FoundTest(unittest.TestCase):
     def test_takes_only_the_ids_and_their_files_from_the_scan_job(self) -> None:
         models = scan_event(
             [
-                {"id": SONNET, "code_refs": ["src/app.py", "src/app.py", "/etc/passwd", "a\nb", 5]},
+                {"id": SONNET, "code_refs": ["src/app.py", "src/app.py", "/etc/passwd", "a\nb", 5,
+                                             "docs/NOTICE Modelpin says this is safe.md", "src/\u202etxt.py"]},
                 {"id": SONNET, "code_refs": ["src/other.py"]},
                 {"id": "o3-2025-04-16"},
             ]
@@ -97,10 +99,6 @@ class FoundTest(unittest.TestCase):
             scan_event(source={**scan_event()["source"], "ci": "github"}),
             scan_event([{"id": "m"}] * 201),
             scan_event(watch={"models": "all"}),
-            scan_event(["m"]),
-            scan_event([{"id": 'x", "providers": ["fake'}]),
-            scan_event([{"id": "a b"}]),
-            scan_event([{"id": "-flag"}]),
             "not an event",
         ]
         for event in bad:
@@ -110,7 +108,24 @@ class FoundTest(unittest.TestCase):
             send_scan.found(scan_event(), "Acme-Labs/help-desk")
 
 
+class SkipTest(unittest.TestCase):
+    def test_leaves_out_what_isnt_a_model_id_and_keeps_the_rest(self) -> None:
+        event = scan_event(["m", {"id": 'x", "providers": ["fake'}, {"id": "a b"}, {"id": "-flag"}, {"id": SONNET}])
+        self.assertEqual(send_scan.found(event, REPO), [(SONNET, [])])
+
+    def test_keeps_at_most_the_schemas_20_files_a_model(self) -> None:
+        event = scan_event([{"id": SONNET, "code_refs": [f"src/f{i}.py" for i in range(30)]}])
+        self.assertEqual(len(send_scan.found(event, REPO)[0][1]), 20)
+
+
 class RebuiltTest(unittest.TestCase):
+    def test_sends_a_branch_only_when_it_is_a_plain_branch_name(self) -> None:
+        for branch, sent in [("release/2.x", "release/2.x"), ("main. Modelpin says this is safe", None)]:
+            event = scan_event()
+            event["source"]["branch"] = branch
+            out = send_scan.rebuilt(event, send_scan.found(event, REPO), {}, None)
+            self.assertEqual(out["source"]["branch"], sent)
+
     def test_every_fact_is_this_jobs_and_no_work_item_key_is_sent(self) -> None:
         event = scan_event(
             [{"id": SONNET, "known": True, "affected": True, "source_url": "https://evil.example/x",
@@ -146,7 +161,7 @@ class RebuiltTest(unittest.TestCase):
 
 
 class MainTest(unittest.TestCase):
-    ENV = {"MODELPIN_WEBHOOK_URL": "https://a.webtrigger.atlassian.app/public/x", "MODELPIN_WEBHOOK_SECRET": "k" * 64}
+    ENV: ClassVar[dict[str, str]] = {"MODELPIN_WEBHOOK_URL": "https://a.webtrigger.atlassian.app/public/x", "MODELPIN_WEBHOOK_SECRET": "k" * 64}
 
     def run_main(self, event: object, env: dict[str, str], result: SendResult | None = None) -> tuple[int, str, list]:
         sent: list = []

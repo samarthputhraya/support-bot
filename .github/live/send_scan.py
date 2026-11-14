@@ -33,9 +33,14 @@ SOURCE_FIELDS = ("ci", "repo_key", "repo_url", "commit", "branch", "pr_id", "pr_
 EVENT_FIELDS = ("schema", "event_id", "kind", "sent_at", "relay_version", "modelpin_version")
 # A model ID as Modelpin's scan reports one: no spaces, quotes or control characters.
 MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}")
-# A file path relative to the repository, as the relay reports it.
-CODE_REF = re.compile(r"[^\x00-\x1f\x7f]{1,500}")
-MAX_REFS = 50
+# A file path relative to the repository, kept only when plain: a stranger's file name could otherwise hold a sentence
+# or bidirectional controls that read as Modelpin's own words on a judge's work item (security review S1, 15 Nov 2026).
+CODE_REF = re.compile(r"[A-Za-z0-9._@+-]+(?:/[A-Za-z0-9._@+-]+)*")
+MAX_CODE_REF = 200
+# The event schema's limit on one model's files (codeRefs.maxItems), so a merged row can't make Jira refuse the scan.
+MAX_REFS = 20
+# A branch name, kept only when plain, for the same reason as a file path; otherwise none is sent.
+BRANCH = re.compile(r"[A-Za-z0-9._/-]{1,100}")
 PROVIDERS = ["anthropic", "openai", "google"]
 
 
@@ -63,11 +68,13 @@ def found(event: Any, repo: str) -> list[tuple[str, list[str]]]:
     out: dict[str, list[str]] = {}
     for model in models:
         model_id = model.get("id") if isinstance(model, dict) else None
+        # Left out, not refused: one odd entry (a class name with a space, say) shouldn't empty the whole scan; it
+        # never reaches Modelpin's config or Jira (security review S2, 15 Nov 2026).
         if not isinstance(model_id, str) or not MODEL_ID.fullmatch(model_id):
-            raise Refused("the scan job's event names something that isn't a model ID")
+            continue
         refs = model.get("code_refs")
         refs = refs if isinstance(refs, list) else []
-        clean = [r for r in refs if isinstance(r, str) and CODE_REF.fullmatch(r) and not r.startswith("/")]
+        clean = [r for r in refs if isinstance(r, str) and len(r) <= MAX_CODE_REF and CODE_REF.fullmatch(r)]
         kept = out.setdefault(model_id, [])
         for ref in clean:
             if ref not in kept and len(kept) < MAX_REFS:
@@ -88,6 +95,9 @@ def registry_facts(ids: list[str]) -> tuple[dict[str, dict[str, Any]], dict[str,
             cwd=tmp,
             timeout=120,
             check=False,
+            # It reads IDs that came from a stranger's repository, so it gets no Jira address or key (security
+            # review S3, 15 Nov 2026).
+            env={k: v for k, v in os.environ.items() if not k.startswith("MODELPIN_WEBHOOK_")},
         )
     try:
         doc = json.loads(run.stdout)
@@ -129,6 +139,8 @@ def rebuilt(event: dict[str, Any], models: list[tuple[str, list[str]]], facts: d
     out: dict[str, Any] = {k: event.get(k) for k in EVENT_FIELDS}
     out["sample"] = False
     out["source"] = {k: source.get(k) for k in SOURCE_FIELDS}
+    branch = out["source"].get("branch")
+    out["source"]["branch"] = branch if isinstance(branch, str) and BRANCH.fullmatch(branch) else None
     out["source"].update(jira_keys=[], code_refs=[], history_keys=[])
     out["check"] = None
     rows = []
