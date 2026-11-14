@@ -1,0 +1,10 @@
+# Modelpin settings for a repository scan (.github/workflows/modelpin-scan.yml), passed with --config so a
+# modelpin.yaml in the scanned repository is never read. No model is declared here: every model in a scan's result
+# is one Modelpin read in that repository's files (--scan). The providers say only whose model IDs to look up in the
+# registry shipped with Modelpin; `modelpin watch` never calls a model or the network.
+models: []
+
+providers:
+  - anthropic
+  - openai
+  - google

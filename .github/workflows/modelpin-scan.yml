@@ -1,0 +1,121 @@
+# A repository scan started from Modelpin for Jira. A Jira admin names a public GitHub repository; their browser opens
+# the start page, which checks with GitHub that the repository is public and at most 250 MB, then runs this workflow
+# with a sealed ticket naming that repository and that Jira site. Modelpin reads the repository's files for model
+# IDs and looks each one up in the registry shipped with it (`modelpin watch --scan`). No model is called, nothing
+# from the repository is run, and it holds no API key.
+#
+# Three jobs, so the named repository's files never share a runner with the site's address or signing key:
+#   ticket  opens the ticket and says which repository; its name is public, the site's address isn't.
+#   scan    no secret and no token: clones the repository without its history, scans it, builds the event.
+#   send    opens the ticket again, checks the event is one scan of that repository, and sends it, signed for that
+#           one request. The repository's work item keys are dropped: they belong to its own committers.
+# Modelpin's dependencies are pinned with hashes in .github/live/requirements.txt.
+name: Modelpin repository scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticket:
+        description: Sealed by Modelpin for Jira; only this repository's secret opens it
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  ticket:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    outputs:
+      repo: ${{ steps.ticket.outputs.repo }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Open the ticket
+        id: ticket
+        env:
+          MODELPIN_LIVE_SECRET: ${{ secrets.MODELPIN_LIVE_SECRET }}
+        run: node .github/live/open-scan.mjs repo
+
+  scan:
+    needs: ticket
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install Modelpin and its relay
+        run: pip install --require-hashes -r .github/live/requirements.txt
+      # The name passed the ticket's owner/name check in three places (Jira, the start page, open-scan.mjs), and it
+      # reaches the shell only quoted. No history, no tags, no submodules, links checked out as plain files.
+      - name: Fetch the repository
+        env:
+          REPO: ${{ needs.ticket.outputs.repo }}
+          GIT_TERMINAL_PROMPT: "0"
+          # Large files kept in Git LFS aren't fetched: only the pointers are scanned.
+          GIT_LFS_SKIP_SMUDGE: "1"
+        run: |
+          timeout 180 git -c core.symlinks=false -c protocol.file.allow=never \
+            clone --depth 1 --no-tags --single-branch --no-recurse-submodules \
+            "https://github.com/${REPO}.git" "$RUNNER_TEMP/repo"
+      - name: Scan it
+        working-directory: ${{ runner.temp }}/repo
+        run: |
+          code=0
+          timeout 300 modelpin watch --scan --json \
+            --config "$GITHUB_WORKSPACE/.github/live/scan.yaml" --store-dir "$RUNNER_TEMP/store" \
+            > "$RUNNER_TEMP/watch.out" || code=$?
+          python "$GITHUB_WORKSPACE/.github/live/scan_result.py" \
+            --output "$RUNNER_TEMP/watch.out" --exit-code "$code" --write "$RUNNER_TEMP/watch.json"
+      - name: Build the event
+        working-directory: ${{ runner.temp }}/repo
+        run: |
+          mkdir -p "$RUNNER_TEMP/event"
+          modelpin-relay publish-watch --ci local --input "$RUNNER_TEMP/watch.json" \
+            --no-event --out "$RUNNER_TEMP/event"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9   # v7.0.2
+        with:
+          name: scan-event
+          path: ${{ runner.temp }}/event/event.json
+          if-no-files-found: error
+          retention-days: 1
+
+  send:
+    needs: [ticket, scan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install Modelpin's relay
+        run: pip install --require-hashes -r .github/live/requirements.txt
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333   # v8.0.2
+        with:
+          name: scan-event
+          path: ${{ runner.temp }}/scan
+      - name: Open the ticket
+        id: ticket
+        env:
+          MODELPIN_LIVE_SECRET: ${{ secrets.MODELPIN_LIVE_SECRET }}
+        run: node .github/live/open-scan.mjs send
+      - name: Send the scan to Jira
+        env:
+          MODELPIN_WEBHOOK_URL: ${{ steps.ticket.outputs.url }}
+          MODELPIN_WEBHOOK_SECRET: ${{ steps.ticket.outputs.key }}
+          REPO: ${{ steps.ticket.outputs.repo }}
+        run: python .github/live/send_scan.py --event "$RUNNER_TEMP/scan/event.json" --repo "$REPO"
