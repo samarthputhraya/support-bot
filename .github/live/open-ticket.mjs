@@ -18,7 +18,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 export const REPLACEMENTS = ["claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6"];
-export const BRANCHES = ["main", "fixed-prompt"];
+export const BRANCHES = ["main", "fixed-prompt", "explicit-rules"];
 // A check takes about 2 minutes, and Jira takes no results once the ticket's 30 minutes are over.
 export const MIN_SECONDS_LEFT = 5 * 60;
 
