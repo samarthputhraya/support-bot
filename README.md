@@ -33,10 +33,11 @@ recorded before then. The baseline in `.modelpin/` is that recording.
 
 ## Branches
 
-| Branch         | Prompt                                                                                                                                                                            |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `main`         | The support prompt as first written.                                                                                                                                              |
-| `fixed-prompt` | Two rules made stricter: look an order up only when its details are needed, and never one the customer says is someone else's; hand over to a person only if the customer agrees. |
+| Branch           | Prompt                                                                                                                                                                            |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `main`           | The support prompt as first written.                                                                                                                                              |
+| `fixed-prompt`   | Two rules made stricter: look an order up only when its details are needed, and never one the customer says is someone else's; hand over to a person only if the customer agrees. |
+| `explicit-rules` | The rules of `main` as numbered steps: look up each order the customer names first, never one they say is someone else's; one tool per request; set wording for two declines.     |
 
 Each branch has its own baseline, because the scenarios carry the branch's prompt.
 
