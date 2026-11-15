@@ -79,6 +79,13 @@ test("refuses a ticket sealed with another secret, or changed", () => {
   assert.match(refusal(null, BEFORE), /sealed/);
 });
 
+test("runs a ticket for each of the three prompts only on its own branch", () => {
+  const steps = { ...TICKET, b: "explicit-rules" };
+  assert.equal(refusal(steps, { branch: "explicit-rules", nowSeconds: BEFORE.nowSeconds }), null);
+  assert.match(refusal(steps, { branch: "main", nowSeconds: BEFORE.nowSeconds }), /branch/);
+  assert.match(refusal({ ...TICKET, b: "explicit_rules" }, { branch: "explicit_rules", nowSeconds: BEFORE.nowSeconds }), /branch/);
+});
+
 test("runs only what the ticket asks for, while it is open", () => {
   assert.match(refusal(TICKET, { branch: "fixed-prompt", nowSeconds: BEFORE.nowSeconds }), /branch/);
   assert.match(refusal(TICKET, { branch: "main", nowSeconds: TICKET.x }), /over/);
