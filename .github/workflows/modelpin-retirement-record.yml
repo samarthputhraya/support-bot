@@ -1,0 +1,49 @@
+# The retirement, as it happens (QUALITY_REVIEW_4, C-04): each day from 28 Nov to 3 Dec 2026 (UTC), and whenever it's
+# started by hand, .github/live/record.py asks Anthropic's API once whether it still serves claude-sonnet-4-5-20250929
+# (at most 1 output token, well under 0.01 USD a run) and appends the answer's status and error type, with this run's
+# id, to .github/live/retirement-record.jsonl. It never records a reply, a message or a key. Modelpin for Jira then
+# shows the live demo's model as it was on the day, with the run to check it against.
+#
+# A commit made with the workflow's own token starts no other workflow. Outside the window a scheduled run records
+# nothing and commits nothing.
+name: Modelpin retirement record
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # 06:00 UTC, 11:30 IST
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: retirement-record
+  cancel-in-progress: false
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install Anthropic's client, as a live check does
+        run: pip install --require-hashes -r .github/live/requirements.txt
+      - name: Ask once, and record the answer's status
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python .github/live/record.py
+      - name: Commit the record
+        run: |
+          git add .github/live/retirement-record.jsonl
+          if git diff --cached --quiet; then
+            echo "Nothing recorded, so nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Retirement record of claude-sonnet-4-5-20250929, run ${GITHUB_RUN_ID}"
+          git pull --rebase origin main
+          git push origin HEAD:main

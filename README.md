@@ -95,6 +95,13 @@ the versions of the last good live check. The run:
 
 The workflow's tests: `node --test .github/live/open-ticket.test.mjs`.
 
+## The retirement, recorded
+
+`.github/workflows/modelpin-retirement-record.yml` asks Anthropic's API once a day from 28 Nov to
+3 Dec 2026 (UTC) whether it still serves `claude-sonnet-4-5-20250929`, and appends the answer's
+status and error type, with the run's id, to `.github/live/retirement-record.jsonl`. It records no
+reply. Its tests: `python -m unittest discover -s .github/live -p "test_record.py"`.
+
 ## Licence
 
 Apache-2.0. See `LICENSE`.
