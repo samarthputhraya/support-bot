@@ -8,7 +8,16 @@ import unittest
 from importlib import metadata
 from pathlib import Path
 
-from canary import OLD_MODEL, REPLACEMENTS, baseline, replacements, report, versions
+from canary import (
+    OLD_MODEL,
+    PROBE_TICKET,
+    REPLACEMENTS,
+    baseline,
+    replacements,
+    report,
+    start_page,
+    versions,
+)
 
 
 class Refused(Exception):
@@ -28,6 +37,36 @@ def tree(scenarios: list[str], recorded: list[str] | None, model: str = OLD_MODE
 
 
 class CanaryTest(unittest.TestCase):
+    def test_start_page_probe_passes_on_400_and_never_prints_the_address(self) -> None:
+        asked: list[str] = []
+
+        def get(url: str) -> int:
+            asked.append(url)
+            return 400
+
+        address = "https://example.invalid/x1/secret-part"
+        [(ok, line)] = start_page(get, address)
+        self.assertTrue(ok)
+        self.assertEqual(asked, [f"{address}?t={PROBE_TICKET}"])
+        self.assertNotIn("secret-part", line)
+
+    def test_start_page_probe_fails_on_503_other_codes_and_errors(self) -> None:
+        def boom(url: str) -> int:
+            raise TimeoutError("https://example.invalid/x1/secret-part timed out")
+
+        for status in (503, 200, 500):
+            [(ok, line)] = start_page(lambda url, s=status: s, "https://example.invalid/x1/a")
+            self.assertFalse(ok)
+            self.assertIn(str(status), line)
+        [(ok, line)] = start_page(boom, "https://example.invalid/x1/secret-part")
+        self.assertFalse(ok)
+        self.assertNotIn("secret-part", line)
+
+    def test_start_page_probe_is_skipped_without_an_address(self) -> None:
+        [(ok, line)] = start_page(lambda url: 500, None)
+        self.assertTrue(ok)
+        self.assertIn("not checked", line)
+
     def test_versions_pass_only_at_the_pinned_ones(self) -> None:
         pinned = {"modelpin": "0.5.3", "modelpin-relay": "0.1.1"}
         self.assertTrue(all(ok for ok, _ in versions(lambda n: pinned[n])))
