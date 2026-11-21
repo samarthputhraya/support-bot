@@ -1,0 +1,47 @@
+# Records Modelpin's baseline of claude-sonnet-4-5-20250929 for SRE Copilot's scenarios (the public fork
+# samarthputhraya/sre-copilot, MODELPIN.md there), on this repository's Anthropic key, before Anthropic retires the
+# model on 30 Nov 2026; after that it can't be recorded. 8 scenarios, 10 runs each (about 2 to 3 USD). The result is
+# kept as this run's artifact for 30 days: nothing is committed here and nothing is sent anywhere.
+#
+# The repository and the commit are fixed below, never inputs, so the key can't be pointed at anything else. Modelpin
+# only reads that checkout's modelpin.yaml and scenarios/: none of the app's code is installed or run. Run by hand
+# only (Actions, "Modelpin baseline for SRE Copilot", Run workflow).
+name: Modelpin baseline for SRE Copilot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          persist-credentials: false
+          path: support-bot
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with:
+          repository: samarthputhraya/sre-copilot
+          ref: 815d2608fa7672927dd9fc472a05c1c85e5529c0
+          persist-credentials: false
+          path: app
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install Modelpin, as a live check does
+        run: pip install --require-hashes -r support-bot/.github/live/requirements.txt
+      - name: Record the baseline (10 runs a scenario)
+        working-directory: app
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: modelpin baseline --runs 10
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9   # v7.0.2
+        with:
+          name: sre-copilot-baseline
+          path: app/.modelpin/baseline-claude-sonnet-4-5-20250929.json
+          if-no-files-found: error
+          retention-days: 30
