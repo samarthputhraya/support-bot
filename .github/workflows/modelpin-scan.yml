@@ -1,7 +1,8 @@
 # A repository scan started from Modelpin for Jira. A Jira admin names a public GitHub repository; their browser opens
 # the start page, which checks with GitHub that the repository is public and at most 250 MB, then runs this workflow
 # with a sealed ticket naming that repository and that Jira site. Modelpin reads the repository's files for model
-# IDs and looks each one up in the registry shipped with it (`modelpin watch --scan`). No model is called, nothing
+# IDs and looks each one up in .github/live/models.json, Modelpin 0.5.5's registry data read through 0.5.3's
+# --registry option (`modelpin watch --scan`). No model is called, nothing
 # from the repository is run, and it holds no API key.
 #
 # Three jobs, so the named repository's files never share a runner with the site's address or signing key:
@@ -74,6 +75,7 @@ jobs:
           code=0
           timeout 300 modelpin watch --scan --json \
             --config "$GITHUB_WORKSPACE/.github/live/scan.yaml" --store-dir "$RUNNER_TEMP/store" \
+            --registry "$GITHUB_WORKSPACE/.github/live/models.json" \
             > "$RUNNER_TEMP/watch.out" || code=$?
           python "$GITHUB_WORKSPACE/.github/live/scan_result.py" \
             --output "$RUNNER_TEMP/watch.out" --exit-code "$code" --write "$RUNNER_TEMP/watch.json"
