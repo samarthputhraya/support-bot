@@ -157,7 +157,7 @@ class RebuiltTest(unittest.TestCase):
         self.assertEqual(facts[SONNET]["retired_at"], "2026-11-30")
         self.assertIs(facts[SONNET]["affected"], True)
         self.assertIs(facts["my-own-finetune-v2"]["known"], False)
-        self.assertEqual(payload["registry_newest_fetched_at"], "2026-11-22")  # models.json: 0.5.5's registry data
+        self.assertEqual(payload["registry_newest_fetched_at"], "2026-11-26")  # models.json: 0.5.7's registry data
 
 
 class MainTest(unittest.TestCase):

@@ -42,8 +42,8 @@ MAX_REFS = 20
 # A branch name, kept only when plain, for the same reason as a file path; otherwise none is sent.
 BRANCH = re.compile(r"[A-Za-z0-9._/-]{1,100}")
 PROVIDERS = ["anthropic", "openai", "google"]
-# Modelpin 0.5.5's registry data, read with this job's 0.5.3 through its --registry option, so the facts match the
-# Jira app's copy (scripts/registry_from_wheel.py in the app's repository; 23 Nov 2026).
+# Modelpin 0.5.7's registry data, read with this job's 0.5.3 through its --registry option, so the facts match the
+# Jira app's copy (scripts/registry_from_wheel.py in the app's repository; 0.5.5's on 23 Nov 2026, 0.5.7's on 26 Nov 2026).
 REGISTRY = Path(__file__).resolve().parent / "models.json"
 
 
